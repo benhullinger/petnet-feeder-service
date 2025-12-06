@@ -37,6 +37,7 @@ uvicorn = "^0.18.3"
 aiofiles = "^22.1.0"
 Jinja2 = "^3.1.6"
 cryptography = ">=43.0.3"
+urllib3 = ">=2.6.0"
 
 [tool.poetry.dev-dependencies]
 black = {version = "22.8.0", allow-prereleases = true}
