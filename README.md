@@ -6,8 +6,8 @@
 
 ![python](https://img.shields.io/badge/python-3.8%20%7C%203.9-blue)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![codecov](https://codecov.io/gh/feedernet/petnet-feeder-service/branch/master/graph/badge.svg?token=UEK2SQ7C09)](https://codecov.io/gh/feedernet/petnet-feeder-service)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blueviolet)](https://github.com/feedernet/petnet-feeder-service/blob/master/LICENSE)
+[![codecov](https://codecov.io/gh/feedernet/petnet-feeder-service/branch/main/graph/badge.svg?token=UEK2SQ7C09)](https://codecov.io/gh/feedernet/petnet-feeder-service)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blueviolet)](https://github.com/feedernet/petnet-feeder-service/blob/main/LICENSE)
 ![Docker Build](https://github.com/feedernet/petnet-feeder-service/workflows/Docker%20Build/badge.svg)
 ![Backend Testing/Linting](https://github.com/feedernet/petnet-feeder-service/workflows/Backend%20Testing/Linting/badge.svg)
 
