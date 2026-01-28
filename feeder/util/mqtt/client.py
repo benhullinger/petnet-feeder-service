@@ -4,11 +4,12 @@ import logging
 import random
 import re
 import string
+import time
 from typing import List
 
 import semver
 from amqtt.client import MQTTClient
-from amqtt.mqtt.constants import QOS_2
+from amqtt.mqtt.constants import QOS_1, QOS_2
 
 from feeder.database.models import (
     KronosDevices,
@@ -96,6 +97,20 @@ class FeederClient(MQTTClient):
 
     def __init__(self):
         super().__init__(config=CLIENT_CONFIG)
+        self._pending_tasks: set = set()
+
+    async def _process_message_async(self, packet):
+        """Process message in background without blocking MQTT client."""
+        try:
+            await self.handle_message(packet)
+        except Exception:
+            logger.exception("Error processing MQTT message")
+
+    def _schedule_message_processing(self, packet):
+        """Schedule message processing without blocking the MQTT loop."""
+        task = asyncio.create_task(self._process_message_async(packet))
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
 
     async def handle_message(self, packet):
         api_result = self.api_regex.match(packet.variable_header.topic_name)
@@ -242,21 +257,47 @@ class FeederClient(MQTTClient):
         while True:
             try:
                 await self.connect(f"mqtt://{local_username}:{local_password}@localhost:1883/")
-                await self.subscribe([("#", QOS_2)])
+                # Use QOS_1 for subscriptions - QOS_2's 4-way handshake can stall with high msg volume
+                await self.subscribe([("#", QOS_1)])
                 logger.info("MQTT client connected and subscribed")
+                
+                last_message_time = time.time()
+                consecutive_timeouts = 0
                 
                 while True:
                     try:
                         # Use timeout to detect stalls - allows keepalive pings to work
                         message = await asyncio.wait_for(
                             self.deliver_message(), 
-                            timeout=90  # Longer than keepalive to allow ping cycles
+                            timeout=60  # Check every 60s
                         )
                         packet = message.publish_packet
-                        await self.handle_message(packet)
+                        # Process message asynchronously to avoid blocking MQTT protocol
+                        self._schedule_message_processing(packet)
+                        last_message_time = time.time()
+                        consecutive_timeouts = 0
                     except asyncio.TimeoutError:
-                        # No message in 90s is fine, just continue the loop
-                        # This allows the keepalive mechanism to work properly
+                        consecutive_timeouts += 1
+                        time_since_message = time.time() - last_message_time
+                        
+                        # If no message in 5 minutes, connection is likely dead
+                        if time_since_message > 300:
+                            logger.warning(
+                                "No MQTT messages received in %.0f seconds, forcing reconnect",
+                                time_since_message
+                            )
+                            # Force disconnect and break to outer loop for reconnect
+                            try:
+                                await self.disconnect()
+                            except Exception:
+                                pass
+                            break
+                        
+                        if consecutive_timeouts % 3 == 0:
+                            logger.debug(
+                                "MQTT client: %d consecutive timeouts, %.0fs since last message",
+                                consecutive_timeouts, time_since_message
+                            )
                         continue
 
             except Exception as err:  # pylint: disable=broad-except
