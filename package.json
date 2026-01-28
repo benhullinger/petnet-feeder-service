@@ -1,0 +1,26 @@
+{
+  "name": "petnet-feeder-service",
+  "version": "1.0.0",
+  "description": "<img alt=\"Discovered devices screenshot\" src=\"images/brand_header.png\"/>",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benhullinger/petnet-feeder-service.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/benhullinger/petnet-feeder-service/issues"
+  },
+  "homepage": "https://github.com/benhullinger/petnet-feeder-service#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^25.0.10"
+  }
+}

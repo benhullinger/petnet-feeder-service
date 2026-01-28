@@ -14,12 +14,15 @@ def get_current_timestamp() -> int:
 
 
 def get_relative_timestamp(seconds_since_midnight: int, timezone: str) -> int:
+    if not timezone:
+        timezone = "UTC"
     try:
         zone = pytz.timezone(timezone)
     except pytz.exceptions.UnknownTimeZoneError:
-        logger.exception("Failed to map feeder timezone!")
-        zone = None
+        logger.exception("Failed to map feeder timezone: %s", timezone)
+        zone = pytz.utc
 
-    midnight = datetime.combine(datetime.now(zone), time.min)
+    today = datetime.now(zone)
+    midnight = zone.localize(datetime.combine(today.date(), time.min))
     timestamp = datetime.timestamp(midnight) + seconds_since_midnight
     return int(timestamp * MILLIS_PER_SEC)

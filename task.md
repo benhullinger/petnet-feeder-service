@@ -1,0 +1,67 @@
+# Task: Troubleshoot and Fix Pet Feeder History Log
+
+- [ ] Explore Codebase <!-- id: 0 -->
+  - [x] List files to understand project structure <!-- id: 1 -->
+  - [x] Search for "history" and logging related code <!-- id: 2 -->
+  - [x] Analyze `history` mechanism (database, file, etc.) <!-- id: 3 -->
+- [x] Investigate Runtime State <!-- id: 4 -->
+  - [x] Check frontend at `http://192.168.86.31:5000/` <!-- id: 5 -->
+  - [ ] Attempt to check logs on Pi (via SSH if possible/needed) <!-- id: 6 -->
+- [ ] fix inconsistent history log <!-- id: 7 -->
+  - [x] Plan fixes <!-- id: 8 -->
+  - [x] Implement fixes <!-- id: 9 -->
+    - [x] Extract `get_combined_device_schedule` to `models.py`
+    - [x] Update `client.py` topic regexes
+    - [x] Improve `check_connection` in `feeder.py` (util)
+    - [x] Enable MQTT in `kronos` router (`main.py` and `kronos.py`)
+    - [x] Implement sync-on-checkin in `kronos.py`
+- [ ] Verify Solution <!-- id: 10 -->
+- [x] Deploy to Pi <!-- id: 11 -->
+  - [x] Sync modified files to `/home/pi/petnet-feeder-service` on Pi
+  - [x] Rebuild Docker container on Pi
+  - [x] Restart service and verify logs
+- [x] Investigate Persistent Disconnection <!-- id: 12 -->
+  - [x] Check logs for MQTT client connection success
+  - [x] Verify authentications in logs
+  - [x] Check if heartbeat messages are received/processed
+- [x] Verify Solution <!-- id: 10 -->
+- [x] Investigate Stale Connection & Missing History <!-- id: 13 -->
+  - [x] Verify API status (connected but stale timestamps)
+  - [x] Analyze logs for activity after 10:30 AM
+  - [x] Update `check_connection` to check message timestamps
+  - [x] Check if broker detects disconnects (keepalive settings)
+- [x] Investigate Recurring 30-Minute Disconnect <!-- id: 14 -->
+  - [x] Determine exact disconnect time from API/Logs
+  - [x] Check for "keepalive" or timeout errors in logs
+  - [x] Verify MQTT client reconnection logic (is it robust?)
+  - [x] Consider adding application-level heartbeat/watchdog
+- [x] Investigate Schedule Load & Status Message <!-- id: 15 -->
+  - [x] Analyze schedule sync overhead/frequency
+  - [x] Locate source of "Feeder has yet to dispense" message
+  - [x] Investigate link between `FeedingSchedule` and `FeedingResult`
+  - [x] Check device timezone settings in DB
+  - [x] Implement fix for status message logic (timezone or window)
+    - [x] Compare actual feed timestamp vs scheduled target time
+    - [x] Check python environment (pip list)
+    - [x] Verify `get_relative_timestamp` returns correct "today" timestamp
+    - [ ] Debug `dispensed_at` query parameters
+    - [x] Fix timezone awareness in `models.py` query
+- [x] Investigate Watchdog Failure (Recurring Disconnect) <!-- id: 16 -->
+  - [x] Check API for exact stiffness time
+  - [x] Analyze logs: Did watchdog trigger?
+  - [x] Check for blocking calls in `client.py` (e.g. `deliver_message`)
+  - [x] Implement timeouts for message delivery
+- [x] Investigate Heartbeat Message Loss <!-- id: 17 -->
+  - [x] Check broker logs for Charlie's feeder
+  - [x] Determine if hb messages are being sent but filtered
+  - [x] Analyze internal client subscription logic
+- [x] Investigate Missed Meal Dispensing <!-- id: 18 -->
+  - [x] Check database schedules and schema
+  - [x] Analyze logs for sync failures or missed check-ins
+  - [x] Implement fix for schedule sync (hash handling & single-command add)
+  - [x] Verify fix by monitoring logs for `Received schedule hash` and successful syncs
+- [/] Investigate Post-Sync Connection Hang <!-- id: 19 -->
+  - [x] Analyze logs for "forcing reconnect" pattern
+  - [x] Force clean restart of service to clear zombie processes
+  - [/] Implement stability fixes (async handling, QOS reduction)
+  - [ ] Verify fix by monitoring logs for successful heartbeats during sync

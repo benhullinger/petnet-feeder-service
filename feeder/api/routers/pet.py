@@ -5,7 +5,13 @@ from fastapi.exceptions import HTTPException
 from feeder.util import get_relative_timestamp
 from feeder.util.feeder import APIRouterWithMQTTClient
 from feeder.api.models.pet import RegisteredPet, PetSchedule, ScheduledFeed
-from feeder.database.models import Pet, FeedingSchedule, FeedingResult, KronosDevices
+from feeder.database.models import (
+    Pet,
+    FeedingSchedule,
+    FeedingResult,
+    KronosDevices,
+    get_combined_device_schedule,
+)
 
 # Right now this doesn't use the MQTT client, but when a pet is assigned
 # a feeder or a scheduled feed, we will need to send that to the feeder.
@@ -76,19 +82,6 @@ async def get_schedule_for_pet(pet: RegisteredPet):
     return {"events": schedule}
 
 
-async def get_combined_device_schedule(device_hid: str):
-    """
-    Because we allow for multiple pets to be assigned to a feeder,
-    we need to enumerate all scheduled events for all of those pets.
-    """
-    all_events = []
-    pets = await Pet.get(device_hid=device_hid)
-    for pet in pets:
-        # TODO: There are definitely some edge cases here...
-        # What if two pets have an event at the same time?
-        all_events += await FeedingSchedule.get_for_pet(pet_id=pet.id)
-
-    return all_events
 
 
 @router.get("/{pet_id}/schedule", response_model=PetSchedule)

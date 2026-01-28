@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import random
@@ -18,6 +19,15 @@ from feeder.database.models import (
 from feeder.util.mqtt.authentication import local_username, local_password
 
 logger = logging.getLogger(__name__)
+
+# Client configuration with longer keepalive to prevent disconnects
+CLIENT_CONFIG = {
+    'keep_alive': 60,  # Send ping every 60s instead of default 10s
+    'ping_delay': 5,   # Allow 5s delay before keepalive timeout
+    'auto_reconnect': True,
+    'reconnect_max_interval': 30,
+    'reconnect_retries': -1,  # Infinite retries
+}
 
 
 def generate_task_id():
@@ -83,6 +93,9 @@ async def commit_telemetry_data(gateway_id: str, payload: dict):
 class FeederClient(MQTTClient):
     api_regex = re.compile(r"^krs\.api\.gts\.(?P<gateway_id>.*)$")
     telemetry_regex = re.compile(r"^krs\.tel\.gts\.(?P<gateway_id>.*)$")
+
+    def __init__(self):
+        super().__init__(config=CLIENT_CONFIG)
 
     async def handle_message(self, packet):
         api_result = self.api_regex.match(packet.variable_header.topic_name)
@@ -226,14 +239,26 @@ class FeederClient(MQTTClient):
             await self.send_cmd(gateway_id, device_id, "schedule_mod_end", {})
 
     async def start(self):
-        await self.connect(f"mqtt://{local_username}:{local_password}@localhost:1883/")
-        await self.subscribe([("#", QOS_2)])
-        try:
-            while True:
-                message = await self.deliver_message()
-                packet = message.publish_packet
-                await self.handle_message(packet)
+        while True:
+            try:
+                await self.connect(f"mqtt://{local_username}:{local_password}@localhost:1883/")
+                await self.subscribe([("#", QOS_2)])
+                logger.info("MQTT client connected and subscribed")
+                
+                while True:
+                    try:
+                        # Use timeout to detect stalls - allows keepalive pings to work
+                        message = await asyncio.wait_for(
+                            self.deliver_message(), 
+                            timeout=90  # Longer than keepalive to allow ping cycles
+                        )
+                        packet = message.publish_packet
+                        await self.handle_message(packet)
+                    except asyncio.TimeoutError:
+                        # No message in 90s is fine, just continue the loop
+                        # This allows the keepalive mechanism to work properly
+                        continue
 
-        except Exception:  # pylint: disable=broad-except
-            # We cannot let the client error out!
-            logger.exception("Unhandled error in MQTT client!")
+            except Exception as err:  # pylint: disable=broad-except
+                logger.exception("MQTT client error, reconnecting in 5s: %s", err)
+                await asyncio.sleep(5)
