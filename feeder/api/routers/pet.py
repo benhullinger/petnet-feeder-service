@@ -1,5 +1,7 @@
+import datetime
 from typing import List
 
+import pytz
 from fastapi.exceptions import HTTPException
 
 from feeder.util import get_relative_timestamp
@@ -114,6 +116,12 @@ async def new_feed_event(pet_id: int, updated_event: ScheduledFeed):
     events = await get_combined_device_schedule(device.hid)
     await router.client.send_cmd_schedule(device.gatewayHid, device.hid, events=events)
 
+    timezone = pytz.timezone(device.timezone or "UTC")
+    offset = int(datetime.datetime.now(timezone).utcoffset().total_seconds())
+    await router.client.send_cmd_utc_offset(
+        gateway_id=device.gatewayHid, device_id=device.hid, utc_offset=offset
+    )
+
     schedule = await get_schedule_for_pet(pet)
     return schedule
 
@@ -143,6 +151,12 @@ async def update_feed_event(pet_id: int, event_id: int, updated_event: Scheduled
     events = await get_combined_device_schedule(device.hid)
     await router.client.send_cmd_schedule(device.gatewayHid, device.hid, events=events)
 
+    timezone = pytz.timezone(device.timezone or "UTC")
+    offset = int(datetime.datetime.now(timezone).utcoffset().total_seconds())
+    await router.client.send_cmd_utc_offset(
+        gateway_id=device.gatewayHid, device_id=device.hid, utc_offset=offset
+    )
+
     return await get_schedule_for_pet(pet)
 
 
@@ -164,5 +178,11 @@ async def delete_feed_event(pet_id: int, event_id: int):
 
     events = await get_combined_device_schedule(device.hid)
     await router.client.send_cmd_schedule(device.gatewayHid, device.hid, events=events)
+
+    timezone = pytz.timezone(device.timezone or "UTC")
+    offset = int(datetime.datetime.now(timezone).utcoffset().total_seconds())
+    await router.client.send_cmd_utc_offset(
+        gateway_id=device.gatewayHid, device_id=device.hid, utc_offset=offset
+    )
 
     return await get_schedule_for_pet(pet)
