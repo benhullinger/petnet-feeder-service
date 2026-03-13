@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import logging
 import random
@@ -7,6 +8,7 @@ import string
 import time
 from typing import List
 
+import pytz
 import semver
 from amqtt.client import MQTTClient
 from amqtt.mqtt.constants import QOS_1, QOS_2
@@ -16,6 +18,7 @@ from feeder.database.models import (
     DeviceTelemetryData,
     FeedingResult,
     FeedingSchedule,
+    get_combined_device_schedule,
 )
 from feeder.util.mqtt.authentication import local_username, local_password
 
@@ -98,6 +101,7 @@ class FeederClient(MQTTClient):
     def __init__(self):
         super().__init__(config=CLIENT_CONFIG)
         self._pending_tasks: set = set()
+        self._seen_gateways: set = set()
 
     async def _process_message_async(self, packet):
         """Process message in background without blocking MQTT client."""
@@ -126,6 +130,12 @@ class FeederClient(MQTTClient):
             await self.create_request_ack(gateway_id, request_id)
         elif telemetry_result:
             gateway_id = telemetry_result.groupdict()["gateway_id"]
+
+            # On first telemetry from a gateway after startup, re-push schedules
+            if gateway_id not in self._seen_gateways:
+                self._seen_gateways.add(gateway_id)
+                await self._push_schedules_for_gateway(gateway_id)
+
             try:
                 payload = json.loads(packet.payload.data)
             except UnicodeDecodeError:
@@ -150,6 +160,36 @@ class FeederClient(MQTTClient):
         await self.publish(
             f"krs/api/stg/{gateway_id}", json.dumps(reply).encode("utf-8"), qos=QOS_2
         )
+
+    async def _push_schedules_for_gateway(self, gateway_id):
+        """Re-push schedules and UTC offset to all devices on a gateway."""
+        try:
+            gateway_devices = await KronosDevices.get(gateway_hid=gateway_id)
+            for dev in gateway_devices:
+                device_hid = dev.hid
+                events = await get_combined_device_schedule(device_hid)
+                if events:
+                    await self.send_cmd_schedule(gateway_id, device_hid, events=events)
+                    logger.info(
+                        "Re-pushed %d schedule events to %s on connect",
+                        len(events), device_hid,
+                    )
+                if dev.timezone:
+                    tz = pytz.timezone(dev.timezone)
+                    offset = int(
+                        datetime.datetime.now(tz).utcoffset().total_seconds()
+                    )
+                    await self.send_cmd_utc_offset(
+                        gateway_id, device_hid, utc_offset=offset
+                    )
+                    logger.info(
+                        "Re-pushed UTC offset %d to %s on connect",
+                        offset, device_hid,
+                    )
+        except Exception:
+            logger.exception(
+                "Failed to push schedules for gateway %s on connect", gateway_id
+            )
 
     async def send_cmd(self, gateway_id, device_id, command, args):
         packet = build_command(device_id, command, args)
@@ -256,6 +296,7 @@ class FeederClient(MQTTClient):
     async def start(self):
         while True:
             try:
+                self._seen_gateways.clear()
                 await self.connect(f"mqtt://{local_username}:{local_password}@localhost:1883/")
                 # Use QOS_1 for subscriptions - QOS_2's 4-way handshake can stall with high msg volume
                 await self.subscribe([("#", QOS_1)])
