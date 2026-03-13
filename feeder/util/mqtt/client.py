@@ -11,7 +11,7 @@ from typing import List
 import pytz
 import semver
 from amqtt.client import MQTTClient
-from amqtt.mqtt.constants import QOS_1, QOS_2
+from amqtt.mqtt.constants import QOS_1
 
 from feeder.database.models import (
     KronosDevices,
@@ -158,7 +158,7 @@ class FeederClient(MQTTClient):
         }
         logger.debug("Publishing MQTT ACK: %s", reply)
         await self.publish(
-            f"krs/api/stg/{gateway_id}", json.dumps(reply).encode("utf-8"), qos=QOS_2
+            f"krs/api/stg/{gateway_id}", json.dumps(reply).encode("utf-8"), qos=QOS_1
         )
 
     async def _push_schedules_for_gateway(self, gateway_id):
@@ -193,7 +193,7 @@ class FeederClient(MQTTClient):
 
     async def send_cmd(self, gateway_id, device_id, command, args):
         packet = build_command(device_id, command, args)
-        await self.publish(f"krs/cmd/stg/{gateway_id}", packet, qos=QOS_2)
+        await self.publish(f"krs/cmd/stg/{gateway_id}", packet, qos=QOS_1)
 
     async def send_cmd_feed(self, gateway_id, device_id, portion=0.0625):
         await self.send_cmd(gateway_id, device_id, "feed", {"portion": portion})
