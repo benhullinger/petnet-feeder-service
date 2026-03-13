@@ -307,11 +307,12 @@ class FeederClient(MQTTClient):
                 
                 while True:
                     try:
-                        # Use timeout to detect stalls - allows keepalive pings to work
-                        message = await asyncio.wait_for(
-                            self.deliver_message(), 
-                            timeout=60  # Check every 60s
-                        )
+                        # Use deliver_message's built-in timeout to detect stalls.
+                        # Do NOT wrap in asyncio.wait_for() — that cancels the outer
+                        # coroutine without cleaning up deliver_message's internal
+                        # deliver_task, leaving orphaned tasks that steal messages
+                        # from the queue and cause a permanent stall.
+                        message = await self.deliver_message(timeout=60)
                         packet = message.publish_packet
                         # Process message asynchronously to avoid blocking MQTT protocol
                         self._schedule_message_processing(packet)
