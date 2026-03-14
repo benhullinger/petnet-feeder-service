@@ -101,7 +101,6 @@ class FeederClient(MQTTClient):
     def __init__(self):
         super().__init__(config=CLIENT_CONFIG)
         self._pending_tasks: set = set()
-        self._seen_gateways: set = set()
 
     async def _process_message_async(self, packet):
         """Process message in background without blocking MQTT client."""
@@ -130,12 +129,6 @@ class FeederClient(MQTTClient):
             await self.create_request_ack(gateway_id, request_id)
         elif telemetry_result:
             gateway_id = telemetry_result.groupdict()["gateway_id"]
-
-            # On first telemetry from a gateway after startup, re-push schedules
-            if gateway_id not in self._seen_gateways:
-                self._seen_gateways.add(gateway_id)
-                await self._push_schedules_for_gateway(gateway_id)
-
             try:
                 payload = json.loads(packet.payload.data)
             except UnicodeDecodeError:
@@ -161,11 +154,17 @@ class FeederClient(MQTTClient):
             f"krs/api/stg/{gateway_id}", json.dumps(reply).encode("utf-8"), qos=QOS_1
         )
 
-    async def _push_schedules_for_gateway(self, gateway_id):
-        """Re-push schedules and UTC offset to all devices on a gateway."""
+    async def _push_all_schedules(self):
+        """Re-push schedules and UTC offset to all known devices.
+
+        Called BEFORE subscribing so the client doesn't receive its own
+        commands back, and BEFORE the message loop so there is no
+        concurrent publish+deliver on the same connection.
+        """
         try:
-            gateway_devices = await KronosDevices.get(gateway_hid=gateway_id)
-            for dev in gateway_devices:
+            all_devices = await KronosDevices.get()
+            for dev in all_devices:
+                gateway_id = dev.gatewayHid
                 device_hid = dev.hid
                 events = await get_combined_device_schedule(device_hid)
                 if events:
@@ -187,9 +186,7 @@ class FeederClient(MQTTClient):
                         offset, device_hid,
                     )
         except Exception:
-            logger.exception(
-                "Failed to push schedules for gateway %s on connect", gateway_id
-            )
+            logger.exception("Failed to push schedules on connect")
 
     async def send_cmd(self, gateway_id, device_id, command, args):
         packet = build_command(device_id, command, args)
@@ -296,25 +293,27 @@ class FeederClient(MQTTClient):
     async def start(self):
         while True:
             try:
-                self._seen_gateways.clear()
                 await self.connect(f"mqtt://{local_username}:{local_password}@localhost:1883/")
-                # Use QOS_1 for subscriptions - QOS_2's 4-way handshake can stall with high msg volume
+                logger.info("MQTT client connected")
+
+                # Push schedules BEFORE subscribing so we don't receive our own
+                # commands back, and before the deliver_message loop so there is
+                # no concurrent publish+deliver on the same connection.
+                await self._push_all_schedules()
+
                 await self.subscribe([("#", QOS_1)])
-                logger.info("MQTT client connected and subscribed")
-                
+                logger.info("MQTT client subscribed")
+
                 last_message_time = time.time()
                 consecutive_timeouts = 0
                 
                 while True:
                     try:
-                        # Use deliver_message's built-in timeout to detect stalls.
-                        # Do NOT wrap in asyncio.wait_for() — that cancels the outer
-                        # coroutine without cleaning up deliver_message's internal
-                        # deliver_task, leaving orphaned tasks that steal messages
-                        # from the queue and cause a permanent stall.
-                        message = await self.deliver_message(timeout=60)
+                        message = await asyncio.wait_for(
+                            self.deliver_message(),
+                            timeout=60,
+                        )
                         packet = message.publish_packet
-                        # Process message asynchronously to avoid blocking MQTT protocol
                         self._schedule_message_processing(packet)
                         last_message_time = time.time()
                         consecutive_timeouts = 0
@@ -328,7 +327,6 @@ class FeederClient(MQTTClient):
                                 "No MQTT messages received in %.0f seconds, forcing reconnect",
                                 time_since_message
                             )
-                            # Force disconnect and break to outer loop for reconnect
                             try:
                                 await self.disconnect()
                             except Exception:
