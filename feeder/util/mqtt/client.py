@@ -100,20 +100,6 @@ class FeederClient(MQTTClient):
 
     def __init__(self):
         super().__init__(config=CLIENT_CONFIG)
-        self._pending_tasks: set = set()
-
-    async def _process_message_async(self, packet):
-        """Process message in background without blocking MQTT client."""
-        try:
-            await self.handle_message(packet)
-        except Exception:
-            logger.exception("Error processing MQTT message")
-
-    def _schedule_message_processing(self, packet):
-        """Schedule message processing without blocking the MQTT loop."""
-        task = asyncio.create_task(self._process_message_async(packet))
-        self._pending_tasks.add(task)
-        task.add_done_callback(self._pending_tasks.discard)
 
     async def handle_message(self, packet):
         api_result = self.api_regex.match(packet.variable_header.topic_name)
@@ -309,12 +295,21 @@ class FeederClient(MQTTClient):
                 
                 while True:
                     try:
-                        message = await asyncio.wait_for(
-                            self.deliver_message(),
-                            timeout=60,
-                        )
+                        # Use deliver_message's built-in timeout so it
+                        # properly cancels its internal deliver_task.
+                        # asyncio.wait_for does NOT cancel the inner task,
+                        # causing orphaned tasks that steal messages from
+                        # the queue and eventually freeze deliver_message.
+                        message = await self.deliver_message(timeout=60)
                         packet = message.publish_packet
-                        self._schedule_message_processing(packet)
+                        # Process synchronously so any publish (e.g. ACK)
+                        # completes before the next deliver_message call.
+                        # This prevents concurrent publish+deliver on the
+                        # same connection.
+                        try:
+                            await self.handle_message(packet)
+                        except Exception:
+                            logger.exception("Error processing MQTT message")
                         last_message_time = time.time()
                         consecutive_timeouts = 0
                     except asyncio.TimeoutError:
