@@ -1,23 +1,37 @@
+import asyncio
+import datetime
 import json
 import logging
 import random
 import re
 import string
+import time
 from typing import List
 
+import pytz
 import semver
 from amqtt.client import MQTTClient
-from amqtt.mqtt.constants import QOS_2
+from amqtt.mqtt.constants import QOS_1
 
 from feeder.database.models import (
     KronosDevices,
     DeviceTelemetryData,
     FeedingResult,
     FeedingSchedule,
+    get_combined_device_schedule,
 )
 from feeder.util.mqtt.authentication import local_username, local_password
 
 logger = logging.getLogger(__name__)
+
+# Client configuration with longer keepalive to prevent disconnects
+CLIENT_CONFIG = {
+    'keep_alive': 60,  # Send ping every 60s instead of default 10s
+    'ping_delay': 5,   # Allow 5s delay before keepalive timeout
+    'auto_reconnect': True,
+    'reconnect_max_interval': 30,
+    'reconnect_retries': -1,  # Infinite retries
+}
 
 
 def generate_task_id():
@@ -84,6 +98,9 @@ class FeederClient(MQTTClient):
     api_regex = re.compile(r"^krs\.api\.gts\.(?P<gateway_id>.*)$")
     telemetry_regex = re.compile(r"^krs\.tel\.gts\.(?P<gateway_id>.*)$")
 
+    def __init__(self):
+        super().__init__(config=CLIENT_CONFIG)
+
     async def handle_message(self, packet):
         api_result = self.api_regex.match(packet.variable_header.topic_name)
         telemetry_result = self.telemetry_regex.match(packet.variable_header.topic_name)
@@ -120,12 +137,46 @@ class FeederClient(MQTTClient):
         }
         logger.debug("Publishing MQTT ACK: %s", reply)
         await self.publish(
-            f"krs/api/stg/{gateway_id}", json.dumps(reply).encode("utf-8"), qos=QOS_2
+            f"krs/api/stg/{gateway_id}", json.dumps(reply).encode("utf-8"), qos=QOS_1
         )
+
+    async def _push_all_schedules(self):
+        """Re-push schedules and UTC offset to all known devices.
+
+        Called BEFORE subscribing so the client doesn't receive its own
+        commands back, and BEFORE the message loop so there is no
+        concurrent publish+deliver on the same connection.
+        """
+        try:
+            all_devices = await KronosDevices.get()
+            for dev in all_devices:
+                gateway_id = dev.gatewayHid
+                device_hid = dev.hid
+                events = await get_combined_device_schedule(device_hid)
+                if events:
+                    await self.send_cmd_schedule(gateway_id, device_hid, events=events)
+                    logger.info(
+                        "Re-pushed %d schedule events to %s on connect",
+                        len(events), device_hid,
+                    )
+                if dev.timezone:
+                    tz = pytz.timezone(dev.timezone)
+                    offset = int(
+                        datetime.datetime.now(tz).utcoffset().total_seconds()
+                    )
+                    await self.send_cmd_utc_offset(
+                        gateway_id, device_hid, utc_offset=offset
+                    )
+                    logger.info(
+                        "Re-pushed UTC offset %d to %s on connect",
+                        offset, device_hid,
+                    )
+        except Exception:
+            logger.exception("Failed to push schedules on connect")
 
     async def send_cmd(self, gateway_id, device_id, command, args):
         packet = build_command(device_id, command, args)
-        await self.publish(f"krs/cmd/stg/{gateway_id}", packet, qos=QOS_2)
+        await self.publish(f"krs/cmd/stg/{gateway_id}", packet, qos=QOS_1)
 
     async def send_cmd_feed(self, gateway_id, device_id, portion=0.0625):
         await self.send_cmd(gateway_id, device_id, "feed", {"portion": portion})
@@ -226,14 +277,64 @@ class FeederClient(MQTTClient):
             await self.send_cmd(gateway_id, device_id, "schedule_mod_end", {})
 
     async def start(self):
-        await self.connect(f"mqtt://{local_username}:{local_password}@localhost:1883/")
-        await self.subscribe([("#", QOS_2)])
-        try:
-            while True:
-                message = await self.deliver_message()
-                packet = message.publish_packet
-                await self.handle_message(packet)
+        while True:
+            try:
+                await self.connect(f"mqtt://{local_username}:{local_password}@localhost:1883/")
+                logger.info("MQTT client connected")
 
-        except Exception:  # pylint: disable=broad-except
-            # We cannot let the client error out!
-            logger.exception("Unhandled error in MQTT client!")
+                # Push schedules BEFORE subscribing so we don't receive our own
+                # commands back, and before the deliver_message loop so there is
+                # no concurrent publish+deliver on the same connection.
+                await self._push_all_schedules()
+
+                await self.subscribe([("#", QOS_1)])
+                logger.info("MQTT client subscribed")
+
+                last_message_time = time.time()
+                consecutive_timeouts = 0
+                
+                while True:
+                    try:
+                        # Use deliver_message's built-in timeout so it
+                        # properly cancels its internal deliver_task.
+                        # asyncio.wait_for does NOT cancel the inner task,
+                        # causing orphaned tasks that steal messages from
+                        # the queue and eventually freeze deliver_message.
+                        message = await self.deliver_message(timeout=60)
+                        packet = message.publish_packet
+                        # Process synchronously so any publish (e.g. ACK)
+                        # completes before the next deliver_message call.
+                        # This prevents concurrent publish+deliver on the
+                        # same connection.
+                        try:
+                            await self.handle_message(packet)
+                        except Exception:
+                            logger.exception("Error processing MQTT message")
+                        last_message_time = time.time()
+                        consecutive_timeouts = 0
+                    except asyncio.TimeoutError:
+                        consecutive_timeouts += 1
+                        time_since_message = time.time() - last_message_time
+                        
+                        # If no message in 5 minutes, connection is likely dead
+                        if time_since_message > 300:
+                            logger.warning(
+                                "No MQTT messages received in %.0f seconds, forcing reconnect",
+                                time_since_message
+                            )
+                            try:
+                                await self.disconnect()
+                            except Exception:
+                                pass
+                            break
+                        
+                        if consecutive_timeouts % 3 == 0:
+                            logger.debug(
+                                "MQTT client: %d consecutive timeouts, %.0fs since last message",
+                                consecutive_timeouts, time_since_message
+                            )
+                        continue
+
+            except Exception as err:  # pylint: disable=broad-except
+                logger.exception("MQTT client error, reconnecting in 5s: %s", err)
+                await asyncio.sleep(5)

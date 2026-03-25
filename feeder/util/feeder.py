@@ -1,8 +1,11 @@
+import logging
 import math
 import hashlib
 import secrets
 
 from fastapi import APIRouter
+
+logger = logging.getLogger(__name__)
 
 
 class APIRouterWithMQTTClient(APIRouter):
@@ -62,11 +65,22 @@ def generate_feeder_hid(uid: str) -> str:
 def check_connection(
     device: "Device", broker: "FeederBroker"  # noqa: F821
 ) -> "Device":  # noqa: F821
-    # This is kinda gross... we are tapping into their internal sessions
-    # storage.
-    # TODO: If we end up forking HBMQTT, we should add an interface for this.
     sessions = broker._sessions
     connected = False
+    
     if device.gatewayHid in sessions:
         connected = sessions[device.gatewayHid][0].transitions.is_connected()
+    else:
+        # Fallback: check if any connected session's username matches the gateway HID
+        for session_id in sessions:
+            session = sessions[session_id][0]
+            if not session.transitions.is_connected():
+                continue
+                
+            # Log successful connection hits to avoid spam
+            if session.username == f"/pegasus:{device.gatewayHid}":
+                logger.debug(f"Device {device.gatewayHid} found via username match in session {session_id}")
+                connected = True
+                break
+    
     return {**device, "connected": connected}

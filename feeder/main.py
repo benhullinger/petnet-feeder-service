@@ -1,4 +1,4 @@
-import logging
+import logging.config
 import asyncio
 from pathlib import Path
 

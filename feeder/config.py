@@ -16,8 +16,8 @@ LOGGING_CONFIG = {
         }
     },
     "loggers": {
-        "": {"handlers": ["default"], "level": "INFO"},
-        "feeder": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        "": {"handlers": ["default"], "level": "DEBUG"},
+        "feeder": {"handlers": ["default"], "level": "DEBUG", "propagate": False},
         "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
         "uvicorn.access": {
             "handlers": ["default"],
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     )
     app_id: str = "38973487e8241ea4483e88ef8ca7934c8663dc25"
     debug: bool = False
-    database_path: str = "./data.db"
+    database_path: str = "/data/data.db"
     mqtt_port: int = 1883
     mqtts_port: int = 8883
     mqtts_public_key: str = "./cert.pem"

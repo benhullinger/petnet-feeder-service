@@ -726,3 +726,17 @@ class FeedingSchedule:
     async def delete_event(cls, event_id: int):
         query = schedules.delete().where(schedules.c.event_id == event_id)
         return await db.execute(query)
+
+async def get_combined_device_schedule(device_hid: str):
+    """
+    Because we allow for multiple pets to be assigned to a feeder,
+    we need to enumerate all scheduled events for all of those pets.
+    """
+    all_events = []
+    pets = await Pet.get(device_hid=device_hid)
+    for pet in pets:
+        # TODO: There are definitely some edge cases here...
+        # What if two pets have an event at the same time?
+        all_events += await FeedingSchedule.get_for_pet(pet_id=pet.id)
+
+    return all_events
