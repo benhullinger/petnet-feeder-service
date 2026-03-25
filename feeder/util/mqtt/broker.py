@@ -22,7 +22,6 @@ class FeederBroker(Broker):
             },
             "auth": {"plugins": ["auth_petnet"]},
             "topic-check": {"enabled": True, "plugins": ["topic_petnet"]},
-            "plugins": ["event_logger"],
         }
 
         if config_overrides:
