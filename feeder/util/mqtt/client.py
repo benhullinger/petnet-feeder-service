@@ -1,5 +1,4 @@
 import asyncio
-import datetime
 import json
 import logging
 import random
@@ -8,7 +7,6 @@ import string
 import time
 from typing import List
 
-import pytz
 import semver
 from amqtt.client import MQTTClient
 from amqtt.mqtt.constants import QOS_1
@@ -18,7 +16,6 @@ from feeder.database.models import (
     DeviceTelemetryData,
     FeedingResult,
     FeedingSchedule,
-    get_combined_device_schedule,
 )
 from feeder.util.mqtt.authentication import local_username, local_password
 
@@ -140,40 +137,6 @@ class FeederClient(MQTTClient):
             f"krs/api/stg/{gateway_id}", json.dumps(reply).encode("utf-8"), qos=QOS_1
         )
 
-    async def _push_all_schedules(self):
-        """Re-push schedules and UTC offset to all known devices.
-
-        Called BEFORE subscribing so the client doesn't receive its own
-        commands back, and BEFORE the message loop so there is no
-        concurrent publish+deliver on the same connection.
-        """
-        try:
-            all_devices = await KronosDevices.get()
-            for dev in all_devices:
-                gateway_id = dev.gatewayHid
-                device_hid = dev.hid
-                events = await get_combined_device_schedule(device_hid)
-                if events:
-                    await self.send_cmd_schedule(gateway_id, device_hid, events=events)
-                    logger.info(
-                        "Re-pushed %d schedule events to %s on connect",
-                        len(events), device_hid,
-                    )
-                if dev.timezone:
-                    tz = pytz.timezone(dev.timezone)
-                    offset = int(
-                        datetime.datetime.now(tz).utcoffset().total_seconds()
-                    )
-                    await self.send_cmd_utc_offset(
-                        gateway_id, device_hid, utc_offset=offset
-                    )
-                    logger.info(
-                        "Re-pushed UTC offset %d to %s on connect",
-                        offset, device_hid,
-                    )
-        except Exception:
-            logger.exception("Failed to push schedules on connect")
-
     async def send_cmd(self, gateway_id, device_id, command, args):
         packet = build_command(device_id, command, args)
         await self.publish(f"krs/cmd/stg/{gateway_id}", packet, qos=QOS_1)
@@ -280,15 +243,8 @@ class FeederClient(MQTTClient):
         while True:
             try:
                 await self.connect(f"mqtt://{local_username}:{local_password}@localhost:1883/")
-                logger.info("MQTT client connected")
-
-                # Push schedules BEFORE subscribing so we don't receive our own
-                # commands back, and before the deliver_message loop so there is
-                # no concurrent publish+deliver on the same connection.
-                await self._push_all_schedules()
-
                 await self.subscribe([("#", QOS_1)])
-                logger.info("MQTT client subscribed")
+                logger.info("MQTT client connected and subscribed")
 
                 last_message_time = time.time()
                 consecutive_timeouts = 0
