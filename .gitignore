@@ -1,3 +1,9 @@
+#DSstore
+.DS_Store
+
+#feeder push
+feeder_service.tar.gz
+
 # Config file
 config.ini
 
